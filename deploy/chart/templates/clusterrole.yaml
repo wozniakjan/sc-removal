@@ -1,0 +1,40 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sap-btp-operator-migration
+rules:
+- apiGroups:
+  - ""
+  resources:
+  # this tool changes owner reference of the secret to prevent
+  # cascade delete when service catalog servicebindings is deleted
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  # needs to get sap-btp-operator ConfigMap 
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - services.cloud.sap.com
+  - servicecatalog.k8s.io
+  resources:
+  - servicebindings
+  - serviceinstances
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
