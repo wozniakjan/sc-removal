@@ -11,7 +11,11 @@ RUN mkdir /root/.ssh/ && \
 ENV GOPRIVATE=github.com/SAP/sap-btp-service-operator-migration
 RUN git config --global url.git@github.com:.insteadOf https://github.com/
 
-RUN CGO_ENABLED=0 go install github.com/SAP/sap-btp-service-operator-migration@v0.1.0
+# TODO: sent changes to upstream
+# https://github.com/wozniakjan/sap-btp-service-operator-migration/pull/new/allow_in_cluster
+RUN git clone --branch=allow_in_cluster --depth=1 https://github.com/wozniakjan/sap-btp-service-operator-migration && \
+    cd sap-btp-service-operator-migration && \
+    CGO_ENABLED=0 go build -o /go/bin/sap-btp-service-operator-migration main.go
 
 # Run image
 FROM gcr.io/distroless/static:latest
