@@ -2,20 +2,23 @@ package main
 
 import (
 	"context"
+
 	helmclient "github.com/mittwald/go-helm-client"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 
+	"log"
+	"time"
+
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
-	"log"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"time"
 
 	"github.com/kubernetes-sigs/service-catalog/pkg/apis/servicecatalog/v1beta1"
 )
@@ -85,6 +88,11 @@ func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
 	}, nil
 }
 
+func isCRDMissing(err error) bool {
+	_, ok := err.(*meta.NoKindMatchError)
+	return ok
+}
+
 func (c *Cleaner) RemoveRelease(releaseName string) error {
 	log.Printf("Looking for %s release...", releaseName)
 	release, err := c.helmClient.GetRelease(releaseName)
@@ -145,11 +153,6 @@ func (c *Cleaner) RemoveResources() error {
 			Group:   "addons.kyma-project.io",
 			Version: "v1alpha1",
 		},
-		{
-			Kind:    "ClusterAddonsConfiguration",
-			Group:   "addons.kyma-project.io",
-			Version: "v1alpha1",
-		},
 	}
 
 	namespaces := &v1.NamespaceList{}
@@ -164,21 +167,39 @@ func (c *Cleaner) RemoveResources() error {
 			u := &unstructured.Unstructured{}
 			u.SetGroupVersionKind(gvk)
 			err := c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(namespace.Name))
+			if isCRDMissing(err) {
+				log.Printf("CRD for GVK %s not found, skipping resource deletion", gvk)
+				break
+			}
 			if err != nil {
 				return err
 			}
 		}
 	}
 
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{
-		Kind:    "ClusterServiceBroker",
-		Group:   "servicecatalog.k8s.io",
-		Version: "v1beta1",
-	})
-	err = c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(""))
-	if err != nil {
-		return err
+	clusterGVKList := []schema.GroupVersionKind{
+		{
+			Kind:    "ClusterAddonsConfiguration",
+			Group:   "addons.kyma-project.io",
+			Version: "v1alpha1",
+		},
+		{
+			Kind:    "ClusterServiceBroker",
+			Group:   "servicecatalog.k8s.io",
+			Version: "v1beta1",
+		},
+	}
+	for _, gvk := range clusterGVKList {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(gvk)
+		err = c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(""))
+		if isCRDMissing(err) {
+			log.Printf("CRD for GVK %s not found, skipping resource deletion", gvk)
+			continue
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -218,6 +239,10 @@ func (c *Cleaner) PrepareSBUForRemoval() error {
 			Version: "v1alpha1",
 		})
 		err := c.k8sCli.List(context.Background(), ul, client.InNamespace(ns.Name))
+		if isCRDMissing(err) {
+			log.Printf("CRD for ServiceBindingUsage not found, skipping SBU removal")
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -274,6 +299,10 @@ func (c *Cleaner) PrepareForRemoval() error {
 	for _, gvk := range gvkList {
 		for _, ns := range namespaces.Items {
 			err := c.removeFinalizers(gvk, ns.Name)
+			if isCRDMissing(err) {
+				log.Printf("CRD for GVK %s not found, skipping finalizer removal", gvk)
+				break
+			}
 			if err != nil {
 				return err
 			}
@@ -283,6 +312,10 @@ func (c *Cleaner) PrepareForRemoval() error {
 	log.Println("ServiceBindings secrets owner references")
 	var bindings = &v1beta1.ServiceBindingList{}
 	err = c.k8sCli.List(context.Background(), bindings, client.InNamespace(""))
+	if isCRDMissing(err) {
+		log.Printf("CRD for ServiceBinding not found, skipping owner reference secret adjustments")
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -314,7 +347,7 @@ func (c *Cleaner) PrepareForRemoval() error {
 	return nil
 }
 
-func (c *Cleaner) RemnoveCRDs() error {
+func (c *Cleaner) RemoveCRDs() error {
 	crdsList := &apiextensions.CustomResourceDefinitionList{}
 
 	err := c.k8sCli.List(context.Background(), crdsList)
