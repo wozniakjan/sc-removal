@@ -88,11 +88,6 @@ func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
 	}, nil
 }
 
-func isCRDMissing(err error) bool {
-	_, ok := err.(*meta.NoKindMatchError)
-	return ok
-}
-
 func (c *Cleaner) RemoveRelease(releaseName string) error {
 	log.Printf("Looking for %s release...", releaseName)
 	release, err := c.helmClient.GetRelease(releaseName)
@@ -167,7 +162,7 @@ func (c *Cleaner) RemoveResources() error {
 			u := &unstructured.Unstructured{}
 			u.SetGroupVersionKind(gvk)
 			err := c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(namespace.Name))
-			if isCRDMissing(err) {
+			if meta.IsNoMatchError(err) {
 				log.Printf("CRD for GVK %s not found, skipping resource deletion", gvk)
 				break
 			}
@@ -193,7 +188,7 @@ func (c *Cleaner) RemoveResources() error {
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(gvk)
 		err = c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(""))
-		if isCRDMissing(err) {
+		if meta.IsNoMatchError(err) {
 			log.Printf("CRD for GVK %s not found, skipping resource deletion", gvk)
 			continue
 		}
@@ -239,7 +234,7 @@ func (c *Cleaner) PrepareSBUForRemoval() error {
 			Version: "v1alpha1",
 		})
 		err := c.k8sCli.List(context.Background(), ul, client.InNamespace(ns.Name))
-		if isCRDMissing(err) {
+		if meta.IsNoMatchError(err) {
 			log.Printf("CRD for ServiceBindingUsage not found, skipping SBU removal")
 			continue
 		}
@@ -299,7 +294,7 @@ func (c *Cleaner) PrepareForRemoval() error {
 	for _, gvk := range gvkList {
 		for _, ns := range namespaces.Items {
 			err := c.removeFinalizers(gvk, ns.Name)
-			if isCRDMissing(err) {
+			if meta.IsNoMatchError(err) {
 				log.Printf("CRD for GVK %s not found, skipping finalizer removal", gvk)
 				break
 			}
@@ -312,7 +307,7 @@ func (c *Cleaner) PrepareForRemoval() error {
 	log.Println("ServiceBindings secrets owner references")
 	var bindings = &v1beta1.ServiceBindingList{}
 	err = c.k8sCli.List(context.Background(), bindings, client.InNamespace(""))
-	if isCRDMissing(err) {
+	if meta.IsNoMatchError(err) {
 		log.Printf("CRD for ServiceBinding not found, skipping owner reference secret adjustments")
 		return nil
 	}
