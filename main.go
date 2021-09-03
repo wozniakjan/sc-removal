@@ -48,6 +48,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer cleaner.printStats()
 
 	if command == CommandSBUPrepare {
 		log.Println("Removing service-catalog-addons release")
