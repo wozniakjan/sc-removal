@@ -2,15 +2,17 @@ package main
 
 import (
 	"io/ioutil"
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"log"
 	"os"
 	"path"
 	"time"
+
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
 const CommandSBUPrepare = "sbu-prepare"
 const CommandFinalClean = "final-clean"
+
 /*
 The application expects environment varialbe "KUBECONFIG" to be set, then uninstalls Service Catalog and removes all SC resources.
 */
@@ -95,7 +97,7 @@ func main() {
 		}
 
 		log.Println("Deleting CRDs")
-		err = cleaner.RemnoveCRDs()
+		err = cleaner.RemoveCRDs()
 		if err != nil {
 			panic(err)
 		}
