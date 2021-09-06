@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"sort"
 
 	helmclient "github.com/mittwald/go-helm-client"
 	"helm.sh/helm/v3/pkg/storage/driver"
@@ -33,6 +35,7 @@ type Cleaner struct {
 	k8sCli            client.Client
 	kubeConfigContent []byte
 	helmClient        helmclient.Client
+	stats             map[string]int
 }
 
 func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
@@ -85,7 +88,21 @@ func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
 		k8sCli:            k8sCli,
 		kubeConfigContent: kubeConfigContent,
 		helmClient:        helmClient,
+		stats:             make(map[string]int),
 	}, nil
+}
+
+func (c Cleaner) printStats() {
+	msgs := make([]string, 0, len(c.stats))
+	for msg, _ := range c.stats {
+		msgs = append(msgs, msg)
+	}
+	sort.Strings(msgs)
+	for _, msg := range msgs {
+		if count := c.stats[msg]; count > 0 {
+			log.Printf("*** %v: %v", msg, c.stats[msg])
+		}
+	}
 }
 
 func (c *Cleaner) RemoveRelease(releaseName string) error {
@@ -157,11 +174,14 @@ func (c *Cleaner) RemoveResources() error {
 	}
 
 	for _, gvk := range gvkList {
+		msg := fmt.Sprintf("deleted %v", gvk.Kind)
 		for _, namespace := range namespaces.Items {
 			log.Printf("%ss in %s\n", gvk.Kind, namespace.Name)
 			u := &unstructured.Unstructured{}
 			u.SetGroupVersionKind(gvk)
-			err := c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(namespace.Name))
+			ul := &unstructured.UnstructuredList{}
+			ul.SetGroupVersionKind(gvk)
+			err := c.k8sCli.List(context.Background(), ul, client.InNamespace(namespace.Name))
 			if meta.IsNoMatchError(err) {
 				log.Printf("CRD for GVK %s not found, skipping resource deletion", gvk)
 				break
@@ -169,6 +189,11 @@ func (c *Cleaner) RemoveResources() error {
 			if err != nil {
 				return err
 			}
+			err = c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(namespace.Name))
+			if err != nil {
+				return err
+			}
+			c.stats[msg] += len(ul.Items)
 		}
 	}
 
@@ -187,14 +212,22 @@ func (c *Cleaner) RemoveResources() error {
 	for _, gvk := range clusterGVKList {
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(gvk)
-		err = c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(""))
+		ul := &unstructured.UnstructuredList{}
+		ul.SetGroupVersionKind(gvk)
+		err := c.k8sCli.List(context.Background(), ul)
 		if meta.IsNoMatchError(err) {
 			log.Printf("CRD for GVK %s not found, skipping resource deletion", gvk)
-			continue
+			break
 		}
 		if err != nil {
 			return err
 		}
+		err = c.k8sCli.DeleteAllOf(context.Background(), u, client.InNamespace(""))
+		if err != nil {
+			return err
+		}
+		msg := fmt.Sprintf("deleted %v", gvk.Kind)
+		c.stats[msg] += len(ul.Items)
 	}
 	return nil
 }
@@ -214,6 +247,7 @@ func (c *Cleaner) removeFinalizers(gvk schema.GroupVersionKind, ns string) error
 			return err
 		}
 		log.Printf("%s %s/%s: finalizers removed", gvk.Kind, ns, obj.GetName())
+		c.stats[fmt.Sprintf("removed finalizers for %v", gvk.Kind)] += 1
 	}
 
 	return nil
@@ -249,6 +283,7 @@ func (c *Cleaner) PrepareSBUForRemoval() error {
 			if err != nil {
 				return err
 			}
+			c.stats["removed owner references for ServiceBindingUsage"] += 1
 		}
 	}
 	return nil
@@ -321,6 +356,7 @@ func (c *Cleaner) PrepareForRemoval() error {
 		if err != nil {
 			return err
 		}
+		c.stats["removed finalizer for ServiceBinding"] += 1
 
 		// find linked secrets
 		var secret = &v1.Secret{}
@@ -337,6 +373,7 @@ func (c *Cleaner) PrepareForRemoval() error {
 		if err != nil {
 			return err
 		}
+		c.stats["removed owner references for Secrets"] += 1
 	}
 
 	return nil
@@ -357,6 +394,7 @@ func (c *Cleaner) RemoveCRDs() error {
 			if err != nil {
 				return err
 			}
+			c.stats["removed CRDs"] += 1
 		}
 	}
 
