@@ -217,7 +217,7 @@ func (c *Cleaner) RemoveResources() error {
 		err := c.k8sCli.List(context.Background(), ul)
 		if meta.IsNoMatchError(err) {
 			log.Printf("CRD for GVK %s not found, skipping resource deletion", gvk)
-			break
+			continue
 		}
 		if err != nil {
 			return err
