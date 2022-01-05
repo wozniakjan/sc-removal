@@ -5,6 +5,6 @@ set -e
 
 cleaner sbu-prepare
 
-sap-btp-service-operator-migration run
+sap-btp-service-operator-migration -namespace ${POD_NAMESPACE} run
 
 cleaner final-clean
