@@ -20,3 +20,8 @@ spec:
 #          command: ["cleaner"]
           image: {{.Values.image.repository}}:{{.Values.image.tag}}
           imagePullPolicy: Always
+          env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
