@@ -6,11 +6,11 @@ rules:
   - apiGroups:
     - "apiextensions.k8s.io"
     resources:
-      - customresourcedefinitions
+    - customresourcedefinitions
     verbs:
-      - get
-      - list
-      - delete
+    - get
+    - list
+    - delete
   - apiGroups:
     - ""
     resources:
@@ -38,6 +38,7 @@ rules:
     - "policy"
     - "security.istio.io"
     - "addons.kyma-project.io"
+    - "serverless.kyma-project.io"
     verbs:
     - "*"
     resources:

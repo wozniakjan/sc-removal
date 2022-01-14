@@ -14,15 +14,19 @@ import (
 	"time"
 
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	errutils "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubernetes-sigs/service-catalog/pkg/apis/servicecatalog/v1beta1"
+	serverless "github.com/kyma-project/kyma/components/function-controller/pkg/apis/serverless/v1alpha1"
 )
 
 const (
@@ -65,6 +69,10 @@ func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
 		return nil, err
 	}
 	err = v1beta1.AddToScheme(scheme.Scheme)
+	if err != nil {
+		return nil, err
+	}
+	err = serverless.AddToScheme(scheme.Scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +261,90 @@ func (c *Cleaner) removeFinalizers(gvk schema.GroupVersionKind, ns string) error
 	return nil
 }
 
+func (c *Cleaner) getFunction(sbu unstructured.Unstructured) (*serverless.Function, error) {
+	if sbu.Object == nil {
+		return nil, fmt.Errorf("SBU %v/%v has no body object", sbu.GetNamespace(), sbu.GetName())
+	}
+	kind, found, err := unstructured.NestedString(sbu.Object, "spec", "usedBy", "kind")
+	if !found || err != nil {
+		return nil, fmt.Errorf("SBU %v/%v missing spec.usedBy.kind", sbu.GetNamespace(), sbu.GetName())
+	}
+	if kind != "serverless-function" {
+		return nil, fmt.Errorf("SBU %v/%v unsupported spec.usedBy.kind %v", sbu.GetNamespace(), sbu.GetName(), kind)
+	}
+	name, found, err := unstructured.NestedString(sbu.Object, "spec", "usedBy", "name")
+	function := &serverless.Function{}
+	err = c.k8sCli.Get(context.Background(), types.NamespacedName{Namespace: sbu.GetNamespace(), Name: name}, function)
+	if errors.IsNotFound(err) {
+		return nil, nil
+	}
+	return function, err
+}
+
+func (c *Cleaner) getSecret(sbu unstructured.Unstructured) (*v1.Secret, error) {
+	sbRef, found, err := unstructured.NestedString(sbu.Object, "spec", "serviceBindingRef", "name")
+	if !found || err != nil {
+		return nil, fmt.Errorf("SBU %v/%v missing spec.serviceBindingRef.name", sbu.GetNamespace(), sbu.GetName())
+	}
+	sb := &v1beta1.ServiceBinding{}
+	err = c.k8sCli.Get(context.Background(), types.NamespacedName{Namespace: sbu.GetNamespace(), Name: sbRef}, sb)
+	if err != nil {
+		return nil, err
+	}
+	secret := &v1.Secret{}
+	err = c.k8sCli.Get(context.Background(), types.NamespacedName{Namespace: sbu.GetNamespace(), Name: sb.Spec.SecretName}, secret)
+	return secret, err
+}
+
+// The SBUs are responsible for injecting env variables from secrets owned by bindings to pods via mutating webhooks
+// because we are removing SBUs and the webhook with controllers, but we don't want to break existing workloads,
+// we need to mount the secrets as part of the migration
+func (c *Cleaner) mountSBUSecretsToFunctions(sbus *unstructured.UnstructuredList) error {
+	// for each sbu
+	//   1. get all functions for that SBU
+	//   2. get SB secret for the SBU
+	//   3. inject all env vars into all functions that are contained in the secret
+	var errs []error
+	for _, sbu := range sbus.Items {
+		function, err := c.getFunction(sbu)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if function == nil {
+			// if there is no function, we can safely skip it
+			continue
+		}
+		secret, err := c.getSecret(sbu)
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+		for k, _ := range secret.Data {
+			env := v1.EnvVar{
+				Name: k,
+				ValueFrom: &v1.EnvVarSource{
+					SecretKeyRef: &v1.SecretKeySelector{
+						Key: k,
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: secret.Name,
+						},
+					},
+				},
+			}
+			function.Spec.Env = append(function.Spec.Env, env)
+		}
+		err = c.k8sCli.Update(context.Background(), function)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) != 0 {
+		return errutils.NewAggregate(errs)
+	}
+	return nil
+}
+
 func (c *Cleaner) PrepareSBUForRemoval() error {
 	namespaces := &v1.NamespaceList{}
 	err := c.k8sCli.List(context.Background(), namespaces)
@@ -272,6 +364,10 @@ func (c *Cleaner) PrepareSBUForRemoval() error {
 			log.Printf("CRD for ServiceBindingUsage not found, skipping SBU removal")
 			continue
 		}
+		if err != nil {
+			return err
+		}
+		err = c.mountSBUSecretsToFunctions(ul)
 		if err != nil {
 			return err
 		}

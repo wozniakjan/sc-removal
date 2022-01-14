@@ -80,13 +80,6 @@ func main() {
 		}
 
 		time.Sleep(10 * time.Second)
-		log.Println("Removing finalizers")
-		err = cleaner.PrepareForRemoval()
-		if err != nil {
-			panic(err)
-		}
-
-		time.Sleep(4 * time.Second)
 
 		log.Println()
 		log.Println("Deleting resources")
@@ -95,6 +88,14 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
+		}
+
+		time.Sleep(4 * time.Second)
+
+		log.Println("Removing finalizers")
+		err = cleaner.PrepareForRemoval()
+		if err != nil {
+			panic(err)
 		}
 
 		log.Println("Deleting CRDs")
