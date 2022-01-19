@@ -10,4 +10,4 @@ push-image:
 
 .PHONY: build-cleaner
 build-cleaner:
-	go build -o cleaner main.go cleaner.go
+	go build -o cleaner main.go cleaner.go helm-broker.go service-catalog-addons.go service-catalog.go service-manager-proxy.go

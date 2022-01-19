@@ -4,20 +4,22 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
-	helmclient "github.com/mittwald/go-helm-client"
-	"helm.sh/helm/v3/pkg/storage/driver"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 
 	"log"
-	"time"
 
+	gerr "github.com/pkg/errors"
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,12 +31,139 @@ const (
 	HelmBrokerReleaseName           = "helm-broker"
 	ServiceCatalogAddonsReleaseName = "service-catalog-addons"
 	ServiceCatalogReleaseName       = "service-catalog"
+	ServiceManagerProxyReleaseName  = "service-manager-proxy"
+)
+
+var (
+	resources = map[string][]client.Object{
+		HelmBrokerReleaseName:           hbResources,
+		ServiceCatalogAddonsReleaseName: svcatAddonsResources,
+		ServiceCatalogReleaseName:       svcatResources,
+		ServiceManagerProxyReleaseName:  smProxyResources,
+	}
+
+	smProxyResources = []client.Object{
+		&serviceManagerProxyUnstructuredServiceAccount,
+		&serviceManagerProxyRegsecretUnstructuredSecret,
+		&serviceManagerProxyConfigUnstructuredConfigMap,
+		&serviceManagerProxyUnstructuredClusterRole,
+		&serviceManagerProxyUnstructuredClusterRoleBinding,
+		&serviceManagerProxyRegsecretviewerUnstructuredRole,
+		&serviceManagerProxyUnstructuredRoleBinding,
+		&serviceManagerProxyUnstructuredService,
+		&serviceManagerProxyUnstructuredDeployment,
+		&serviceManagerProxyUnstructuredServiceAccount,
+		&serviceManagerProxyRegsecretUnstructuredSecret,
+		&serviceManagerProxyConfigUnstructuredConfigMap,
+		&serviceManagerProxyUnstructuredClusterRole,
+		&serviceManagerProxyUnstructuredClusterRoleBinding,
+		&serviceManagerProxyRegsecretviewerUnstructuredRole,
+		&serviceManagerProxyUnstructuredRoleBinding,
+		&serviceManagerProxyUnstructuredService,
+		&serviceManagerProxyUnstructuredDeployment,
+	}
+
+	svcatResources = []client.Object{
+		&serviceCatalogControllerManagerUnstructuredServiceAccount,
+		&serviceCatalogWebhookUnstructuredServiceAccount,
+		&serviceCatalogTestsUnstructuredServiceAccount,
+		&serviceCatalogCatalogWebhookCertUnstructuredSecret,
+		&serviceCatalogDashboardUnstructuredConfigMap,
+		&servicecatalogK8SIocontrollerManagerUnstructuredClusterRole,
+		&servicecatalogK8SIoserviceCatalogReadinessUnstructuredClusterRole,
+		&servicecatalogK8SIowebhookUnstructuredClusterRole,
+		&serviceCatalogTestsUnstructuredClusterRole,
+		&servicecatalogK8SIocontrollerManagerUnstructuredClusterRoleBinding,
+		&servicecatalogK8SIoserviceCatalogReadinessUnstructuredClusterRoleBinding,
+		&servicecatalogK8SIowebhookUnstructuredClusterRoleBinding,
+		&serviceCatalogTestsUnstructuredClusterRoleBinding,
+		&servicecatalogK8SIoclusterInfoConfigmapUnstructuredRole,
+		&servicecatalogK8SIoleaderLockingControllerManagerUnstructuredRole,
+		&serviceCatalogControllerManagerClusterInfoUnstructuredRoleBinding,
+		&serviceCatalogControllerManagerLeaderElectionUnstructuredRoleBinding,
+		&serviceCatalogCatalogControllerManagerUnstructuredService,
+		&serviceCatalogCatalogWebhookUnstructuredService,
+		&serviceCatalogCatalogControllerManagerUnstructuredDeployment,
+		&serviceCatalogCatalogWebhookUnstructuredDeployment,
+		&servicecatalogUnstructuredBackendModule,
+		&serviceCatalogCatalogWebhookUnstructuredMutatingWebhookConfiguration,
+		&serviceCatalogCatalogControllerManagerUnstructuredPeerAuthentication,
+		&serviceCatalogCatalogWebhookUnstructuredPeerAuthentication,
+		&serviceCatalogCatalogControllerManagerUnstructuredServiceMonitor,
+		&serviceCatalogUnstructuredTestDefinition,
+		&serviceCatalogCatalogValidatingWebhookUnstructuredValidatingWebhookConfiguration,
+	}
+
+	svcatAddonsResources = []client.Object{
+		&serviceCatalogAddonsServiceBindingUsageControllerCleanupUnstructuredJob,
+		&serviceCatalogAddonsServiceCatalogUiUnstructuredPodSecurityPolicy,
+		&serviceCatalogAddonsServiceBindingUsageControllerUnstructuredServiceAccount,
+		&serviceCatalogAddonsServiceCatalogUiUnstructuredServiceAccount,
+		&serviceBindingUsageControllerProcessSbuSpecUnstructuredConfigMap,
+		&serviceBindingUsageControllerDashboardUnstructuredConfigMap,
+		&serviceCatalogUiUnstructuredConfigMap,
+		&serviceCatalogAddonsServiceBindingUsageControllerUnstructuredClusterRole,
+		&serviceCatalogAddonsServiceBindingUsageControllerUnstructuredClusterRoleBinding,
+		&serviceCatalogAddonsServiceCatalogUiUnstructuredRole,
+		&serviceCatalogAddonsServiceCatalogUiUnstructuredRoleBinding,
+		&serviceCatalogAddonsServiceBindingUsageControllerUnstructuredService,
+		&serviceCatalogAddonsServiceCatalogUiUnstructuredService,
+		&serviceCatalogAddonsServiceBindingUsageControllerUnstructuredDeployment,
+		&serviceCatalogAddonsServiceCatalogUiUnstructuredDeployment,
+		&serviceCatalogAddonsServiceCatalogUiUnstructuredDestinationRule,
+		&serviceCatalogAddonsServiceBindingUsageControllerUnstructuredPeerAuthentication,
+		&serviceCatalogAddonsServiceBindingUsageControllerUnstructuredServiceMonitor,
+		&deploymentUnstructuredUsageKind,
+		&serviceCatalogAddonsServiceCatalogUiCatalogUnstructuredVirtualService,
+	}
+
+	hbResources = []client.Object{
+		&helmBrokerCleanupUnstructuredJob,
+		&helmBrokerAddonsUiUnstructuredPodSecurityPolicy,
+		&helmBrokerAddonsUiUnstructuredServiceAccount,
+		&helmBrokerEtcdStatefulEtcdCertsUnstructuredServiceAccount,
+		&helmBrokerUnstructuredServiceAccount,
+		&helmSecretUnstructuredSecret,
+		&helmBrokerWebhookCertUnstructuredSecret,
+		&addonsUiUnstructuredConfigMap,
+		&helmBrokerDashboardUnstructuredConfigMap,
+		&helmConfigMapUnstructuredConfigMap,
+		&sshCfgUnstructuredConfigMap,
+		&helmBrokerEtcdStatefulEtcdCertsUnstructuredClusterRole,
+		&helmBrokerH3UnstructuredClusterRole,
+		&helmBrokerEtcdStatefulEtcdCertsUnstructuredClusterRoleBinding,
+		&helmBrokerH3UnstructuredClusterRoleBinding,
+		&helmBrokerAddonsUiUnstructuredRole,
+		&helmBrokerAddonsUiUnstructuredRoleBinding,
+		&helmBrokerAddonsUiUnstructuredService,
+		&helmBrokerEtcdStatefulUnstructuredService,
+		&helmBrokerEtcdStatefulClientUnstructuredService,
+		&helmBrokerMetricsUnstructuredService,
+		&addonControllerMetricsUnstructuredService,
+		&helmBrokerUnstructuredService,
+		&helmBrokerWebhookUnstructuredService,
+		&helmBrokerAddonsUiUnstructuredDeployment,
+		&helmBrokerUnstructuredDeployment,
+		&helmBrokerWebhookUnstructuredDeployment,
+		&helmBrokerEtcdStatefulUnstructuredStatefulSet,
+		&helmBrokerUnstructuredAuthorizationPolicy,
+		&helmReposUrlsUnstructuredClusterAddonsConfiguration,
+		&addonsclustermicrofrontendUnstructuredClusterMicroFrontend,
+		&addonsmicrofrontendUnstructuredClusterMicroFrontend,
+		&helmBrokerAddonsUiUnstructuredDestinationRule,
+		&helmBrokerEtcdStatefulClientUnstructuredDestinationRule,
+		&helmBrokerMutatingWebhookUnstructuredMutatingWebhookConfiguration,
+		&helmBrokerUnstructuredPeerAuthentication,
+		&helmBrokerEtcdStatefulUnstructuredServiceMonitor,
+		&helmBrokerUnstructuredServiceMonitor,
+		&helmBrokerAddonControllerUnstructuredServiceMonitor,
+		&helmBrokerAddonsUiUnstructuredVirtualService,
+	}
 )
 
 type Cleaner struct {
 	k8sCli            client.Client
 	kubeConfigContent []byte
-	helmClient        helmclient.Client
 	stats             map[string]int
 }
 
@@ -58,6 +187,10 @@ func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
 		}
 	}
 
+	restConfig.Burst = 100
+	restConfig.QPS = 500
+	restConfig.RateLimiter = nil
+
 	k8sCli, err := client.New(restConfig, client.Options{
 		Scheme: scheme.Scheme,
 	})
@@ -68,18 +201,7 @@ func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	helmClient, err := helmclient.NewClientFromRestConf(&helmclient.RestConfClientOptions{
-		Options: &helmclient.Options{
-			Namespace:        "kyma-system",
-			RepositoryConfig: "",
-			RepositoryCache:  "",
-			Debug:            false,
-			Linting:          false,
-			DebugLog:         nil,
-		},
-		RestConfig: restConfig,
-	})
+	err = apiextensions.AddToScheme(scheme.Scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +209,6 @@ func NewCleaner(kubeConfigContent []byte) (*Cleaner, error) {
 	return &Cleaner{
 		k8sCli:            k8sCli,
 		kubeConfigContent: kubeConfigContent,
-		helmClient:        helmClient,
 		stats:             make(map[string]int),
 	}, nil
 }
@@ -106,31 +227,53 @@ func (c Cleaner) printStats() {
 }
 
 func (c *Cleaner) RemoveRelease(releaseName string) error {
-	log.Printf("Looking for %s release...", releaseName)
-	release, err := c.helmClient.GetRelease(releaseName)
-	if err == driver.ErrReleaseNotFound {
-		log.Printf("%s release not found, nothing to do", releaseName)
+	done := make(chan bool)
+	var errs []error
+	go func() {
+		hasResourcesToCheck := true
+		for hasResourcesToCheck {
+			hasResourcesToCheck = false
+			errs = []error{}
+			for _, r := range resources[releaseName] {
+				ro := &unstructured.Unstructured{}
+				ro.SetGroupVersionKind(r.GetObjectKind().GroupVersionKind())
+				if err := c.k8sCli.Get(context.Background(), types.NamespacedName{Name: r.GetName(), Namespace: r.GetNamespace()}, ro); kerrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+					continue
+				} else if err != nil {
+					errs = append(errs, gerr.Wrap(err, "getting resource"))
+				} else {
+					if len(ro.GetFinalizers()) != 0 {
+						rodc := ro.DeepCopy()
+						rodc.SetGroupVersionKind(r.GetObjectKind().GroupVersionKind())
+						rodc.SetFinalizers([]string{})
+						if err := c.k8sCli.Update(context.Background(), rodc); err != nil {
+							errs = append(errs, gerr.Wrap(err, "failed patching"))
+						}
+					}
+				}
+				if err := c.k8sCli.Delete(context.Background(), r); kerrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+					continue
+				} else if err != nil {
+					errs = append(errs, gerr.Wrap(err, fmt.Sprintf("%T %v", err, "failed deleting")))
+				} else {
+					log.Printf("deleting resource %v %v/%v\n", r.GetObjectKind().GroupVersionKind(), r.GetNamespace(), r.GetName())
+					hasResourcesToCheck = true
+				}
+			}
+		}
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		if len(errs) != 0 {
+			return errors.NewAggregate(errs)
+		}
 		return nil
+	case <-time.After(10 * time.Minute):
+		errs = append(errs, fmt.Errorf("deleting %v timed out after 30 minutes", releaseName))
+		return errors.NewAggregate(errs)
 	}
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Found %s release in the namespace %s: status %s", release.Name, release.Namespace, release.Info.Status.String())
-	log.Println(" Uninstalling...")
-	err = c.helmClient.UninstallRelease(&helmclient.ChartSpec{
-		ReleaseName:  releaseName,
-		DisableHooks: true,
-		Wait:         true,
-		Timeout:      time.Minute,
-		Force:        true,
-	})
-	if err != nil {
-		return err
-	}
-
-	log.Println("DONE")
-	return nil
 }
 
 func (c *Cleaner) RemoveResources() error {
@@ -237,14 +380,14 @@ func (c *Cleaner) removeFinalizers(gvk schema.GroupVersionKind, ns string) error
 	ul.SetGroupVersionKind(gvk)
 	err := c.k8sCli.List(context.Background(), ul, client.InNamespace(ns))
 	if err != nil {
-		return err
+		return gerr.Wrap(err, fmt.Sprintf("listing resources %v", gvk))
 	}
 
 	for _, obj := range ul.Items {
 		obj.SetFinalizers([]string{})
 		err := c.k8sCli.Update(context.Background(), &obj)
 		if err != nil {
-			return err
+			return gerr.Wrap(err, fmt.Sprintf("updating resource %v %v/%v", gvk, obj.GetNamespace(), obj.GetName()))
 		}
 		log.Printf("%s %s/%s: finalizers removed", gvk.Kind, ns, obj.GetName())
 		c.stats[fmt.Sprintf("removed finalizers for %v", gvk.Kind)] += 1
@@ -295,7 +438,7 @@ func (c *Cleaner) PrepareForRemoval() error {
 	namespaces := &v1.NamespaceList{}
 	err := c.k8sCli.List(context.Background(), namespaces)
 	if err != nil {
-		return err
+		return gerr.Wrap(err, "listing namespaces")
 	}
 
 	gvkList := []schema.GroupVersionKind{
@@ -334,7 +477,7 @@ func (c *Cleaner) PrepareForRemoval() error {
 				break
 			}
 			if err != nil {
-				return err
+				return gerr.Wrap(err, "removing finalizers")
 			}
 		}
 	}
@@ -347,14 +490,15 @@ func (c *Cleaner) PrepareForRemoval() error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return gerr.Wrap(err, "listing bindings")
 	}
-	for _, item := range bindings.Items {
+	for i, _ := range bindings.Items {
+		item := bindings.Items[i]
 		log.Printf("%s/%s", item.Namespace, item.Name)
 		item.Finalizers = []string{}
 		err := c.k8sCli.Update(context.Background(), &item)
 		if err != nil {
-			return err
+			return gerr.Wrap(err, fmt.Sprintf("updating binding %v/%v", item.Namespace, item.Name))
 		}
 		c.stats["removed finalizer for ServiceBinding"] += 1
 
@@ -364,14 +508,17 @@ func (c *Cleaner) PrepareForRemoval() error {
 			Namespace: item.Namespace,
 			Name:      item.Spec.SecretName,
 		}, secret)
+		if secret.Name == "" {
+			continue
+		}
 		if err != nil {
-			return err
+			return gerr.Wrap(err, fmt.Sprintf("getting secret %v/%v", secret.Namespace, secret.Name))
 		}
 
 		secret.OwnerReferences = []metav1.OwnerReference{}
 		err = c.k8sCli.Update(context.Background(), secret)
 		if err != nil {
-			return err
+			return gerr.Wrap(err, fmt.Sprintf("updating secret %v/%v", secret.Namespace, secret.Name))
 		}
 		c.stats["removed owner references for Secrets"] += 1
 	}

@@ -4,7 +4,7 @@ metadata:
   name: sap-btp-operator-migration
   namespace: {{.Release.Namespace}}
 spec:
-  backoffLimit: 6
+  backoffLimit: 30
   completions: 1
   parallelism: 1
   template:
