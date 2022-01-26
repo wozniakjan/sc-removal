@@ -22,9 +22,13 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 COPY main.go main.go
 COPY cleaner.go cleaner.go
+COPY service-catalog-addons.go service-catalog-addons.go
+COPY service-catalog.go service-catalog.go
+COPY service-manager-proxy.go service-manager-proxy.go
+COPY helm-broker.go helm-broker.go
 COPY deploy/run.sh /run.sh
 
-RUN CGO_ENABLED=0 go build -o /go/bin/cleaner main.go cleaner.go
+RUN CGO_ENABLED=0 go build -o /go/bin/cleaner main.go cleaner.go service-catalog-addons.go service-catalog.go service-manager-proxy.go helm-broker.go
 
 # Run image
 FROM alpine:3.14.0

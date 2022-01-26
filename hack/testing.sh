@@ -45,7 +45,7 @@ kubectl get servicebindingusage -o yaml
 kubectl logs -l app=sample
 
 # Run the tool
-go run main.go cleaner.go
+go run main.go cleaner.go helm-broker.go service-catalog.go service-catalog-addons.go service-manager-proxy.go
 
 # the secret must still exists
 kubectl get secret testing
