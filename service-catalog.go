@@ -242,6 +242,13 @@ var (
 				"name":      "service-catalog-catalog-controller-manager",
 				"namespace": "kyma-system",
 			},
+			"spec": map[string]interface{}{
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{
+						"app": "service-catalog-catalog-controller-manager",
+					},
+				},
+			},
 		},
 	}
 

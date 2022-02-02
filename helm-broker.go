@@ -314,6 +314,13 @@ var (
 				"name":      "helm-broker",
 				"namespace": "kyma-system",
 			},
+			"spec": map[string]interface{}{
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{
+						"app": "helm-broker",
+					},
+				},
+			},
 		},
 	}
 
